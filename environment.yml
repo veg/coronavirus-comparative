@@ -1,0 +1,20 @@
+name: viran
+
+channels:
+  - bioconda  
+  - main
+dependencies:
+  - python=3.7
+  - snakemake
+  - biopython
+  - fasttree
+  - ruby
+  - mafft
+  - matplotlib
+  - plotly
+  - nomkl
+  - seaborn
+  - tqdm
+  - scipy
+  - pandas
+  - plotly plotly-orca

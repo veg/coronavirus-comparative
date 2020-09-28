@@ -1,0 +1,107 @@
+#from tqdm import tqdm
+#from tqdm import tnrange, tqdm_notebook
+#from time import sleep
+
+#import json
+#import itertools
+#from itertools import permutations
+#from scipy.spatial import distance
+
+from python.cosine_sim import cos
+from python.plotter import visualizer
+
+viruses = ["SARS2", "SARS", "MERS", "HKU1", "229E", "NL63", "OC43"]
+genes = ["S", "M", "E", "N"]
+
+HYPHYMP = "hyphy-develop/HYPHYMP"
+HYPHYMPI = "hyphy-develop/HYPHYMPI" 
+
+LIBPATH = "/data/shares/veg/SARS-CoV-2/covid-19/hyphy-develop/res"
+
+PRE = "hyphy-analyses/codon-msa/pre-msa.bf" 
+POST = "hyphy-analyses/codon-msa/post-msa.bf" 
+
+FUBAR = "hyphy-develop/res/TemplateBatchFiles/SelectionAnalyses/FUBAR.bf"
+MEME = "hyphy-develop/res/TemplateBatchFiles/SelectionAnalyses/MEME.bf"
+
+rule all:
+  input:
+    expand("added_files/catted/{virus}_{gene}.catted.fasta_protein.aligned.compressed.codon.fas.MEME.json", virus=viruses, gene=genes)
+    #"added_files/catted/cosine_heatmap.png",
+    #"added_files/catted/cosine_clustermap.png"
+    #expand("added_files/catted/{virus}_{gene}.catted.fasta_protein.aligned.compressed.codon.fas.FUBAR.json", virus=viruses, gene=genes)
+
+rule pre_mafft:
+  input:
+    in_fas = "added_files/catted/{virus}_{gene}.catted.fasta",
+    in_ref = "/home/aglucaci/BetaCoronavirus_Comparative/data/ReferenceCDS/{virus}/{gene}.fasta"
+  output:
+    out_prot = "added_files/catted/{virus}_{gene}.catted.fasta_protein.fas",
+    out_nuc = "added_files/catted/{virus}_{gene}.catted.fasta_nuc.fas"
+  shell:
+    "mpirun -np 16 {HYPHYMPI} LIBPATH={LIBPATH} {PRE} --input {input.in_fas} --reference {input.in_ref} --keep-reference Yes"
+
+rule mafft_align:
+  input:
+    in_prot = rules.pre_mafft.output.out_prot 
+  output:
+    out_prot = "added_files/catted/{virus}_{gene}.catted.fasta_protein.aligned.fas"
+  shell:
+    "mafft --auto --quiet {input.in_prot} > {output.out_prot} 2> mafft_errors.log"
+
+rule post_mafft:
+  input:
+    in_prot = rules.mafft_align.output.out_prot,
+    in_nuc = rules.pre_mafft.output.out_nuc
+  output:
+    out_compressed = "added_files/catted/{virus}_{gene}.catted.fasta_protein.aligned.compressed.codon.fas",
+    duplicates = "added_files/catted/{virus}_{gene}.duplicates.json"
+  shell:
+    "mpirun -np 16 {HYPHYMPI} LIBPATH={LIBPATH} {POST} --protein-msa {input.in_prot} --nucleotide-sequences {input.in_nuc} --compressed Yes --duplicates {output.duplicates} --output {output.out_compressed}"
+
+rule tree_maker:
+  input:
+    in_codon = rules.post_mafft.output.out_compressed
+  output:
+    out_tree = "added_files/catted/{virus}_{gene}.catted.fasta_protein.aligned.compressed.codon.fas.tree"
+  shell:
+    "FastTree -gtr -nt {input.in_codon} > {output.out_tree}"
+
+rule hyphy_fubar:
+  input:
+    in_codon = rules.post_mafft.output.out_compressed,
+    in_tree = rules.tree_maker.output.out_tree
+  output:
+    fubar_json = "added_files/catted/{virus}_{gene}.catted.fasta_protein.aligned.compressed.codon.fas.FUBAR.json"
+  shell:
+    "mpirun -np 16 {HYPHYMPI} LIBPATH={LIBPATH} {FUBAR} --alignment {input.in_codon} --tree {input.in_tree} --grid 50 --chains 10 --chain-length 10000000 --burn-in 1000000 --output {output.fubar_json}"
+
+rule hyphy_MEME:
+  input:
+    in_codon = rules.post_mafft.output.out_compressed,
+    in_tree = rules.tree_maker.output.out_tree
+  output:
+    MEME_json = "added_files/catted/{virus}_{gene}.catted.fasta_protein.aligned.compressed.codon.fas.MEME.json"
+  shell:
+    "mpirun -np 16 {HYPHYMPI} LIBPATH={LIBPATH} {MEME} --alignment {input.in_codon} --tree {input.in_tree} --branches Internal --output {output.MEME_json}"
+
+## send all fubar results in, compute cosine similarity ##
+rule cosine_sim:
+  input:
+    fubar_jsons = expand("added_files/catted/{virus}_{gene}.catted.fasta_protein.aligned.compressed.codon.fas.FUBAR.json", virus=viruses, gene=genes)
+  output:
+    out_csv = "added_files/catted/cosine_similarity_final.csv"
+  run:
+    cos(viruses, genes, output.out_csv)
+
+## visualize the cosine similarity results we have ##
+rule plots:
+  input:
+    in_data = rules.cosine_sim.output.out_csv
+  output:
+    out_heatmap = "added_files/catted/cosine_heatmap.png",
+    out_clustermap = "added_files/catted/cosine_clustermap.png"
+  run:
+    visualizer(input.in_data, output.out_heatmap, output.out_clustermap)
+
+
